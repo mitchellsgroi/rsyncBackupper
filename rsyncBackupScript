@@ -1,0 +1,102 @@
+#!/bin/bash
+
+
+# Uses rsync to backup files/directories from a remote machine
+# Saves a snapshot of the source and archives modified/deleted files for 30 days
+# If running automatically use ssh keys for passwordless execution
+
+
+### TODO
+#       - Change hard coded 30 day limit to variables
+#       - Implement interlock so backups wait for running ones to complete
+#		- Move error messages to stderr
+
+
+
+### Variables to set -----------------------
+
+# User on the remote machine
+source_user="someUser"
+
+# IP of the remote machine
+source_ip="X.X.X.X"
+
+# Directories to be backed up - make sure to prefix with :
+source_dirs=":/path/to/dir/one :/path/to/dir/two :/path/to/dir/three :/path/to/dir/four"
+
+# Base directory of the backups
+dest_dir="/path/to/backup/dir"
+
+# Directory for current uncompressed copy - will be in base backup dir
+snapshot_dir="currentSnapshot"
+
+# A temporary directory
+temp_dir="temp"
+
+
+
+### Rsync setup --------------------------
+
+# combine sources for rsync
+rsync_source="${source_user}@${source_ip}${source_dirs}"
+
+# rsync will sync into the snaphot dir
+rsync_dest="${dest_dir}/${snapshot_dir}"
+
+rsync_opts="-avh --progress --stats --delete"
+
+# rsync will save previous versions of any file that has changed
+rsync_backup="--backup --backup-dir=${dest_dir}/${temp_dir}"
+
+# Set date variables
+todays_date="$(date +%Y%m%d%H%M)"
+thirty_days_ago="$(date -d "30 days ago" +%Y%m%d%H%M)"
+
+
+# Print the date vars for help debugging
+echo $todays_date
+echo $thirty_days_ago
+
+
+
+### Execution------------------------------
+
+# Take snapshot backing up modified files
+rsync ${rsync_opts} ${rsync_backup} ${rsync_source} ${rsync_dest} | sed '0,/^$/d'
+
+if [ $? -ne 0 ]; then
+	echo "Could not make snapshot"
+	exit 1
+fi
+
+
+# Archive and delete backup if it was created
+if [ -e "${dest_dir}/${temp_dir}" ]; then
+	echo "Modified files detected: Backing up originals..."
+	tar -czf "${dest_dir}/${todays_date}".tgz -C "${dest_dir}" ${temp_dir}
+	
+	if [ $? -ne 0 ]; then
+		# Remove the failed tar file
+		rm "${dest_dir}/${todays_date}".tgz
+		echo "Compression Failed"
+		exit 1
+	fi
+
+	# Remove the backup
+	rm -rf "${dest_dir}/${temp_dir}"
+	if [ $? -ne 0 ]; then
+		echo " Could not delete temporary directory "
+		exit 1
+	fi
+	
+	# Delete old archives
+	# only check files with the right amount of characters in the name
+	for file in "${dest_dir}/"????????????.tgz; do
+		if [ -e ${file} ] && [[ ${file%.tgz} < " ${dest_dir}/${thirty_days_ago}" ]]; then
+			rm ${file}
+		fi
+	done
+fi
+
+exit 0
+
